@@ -1,0 +1,19 @@
+{
+    "name": "hive_selection",
+    "description": "Approach a hive of items and grab the selected item",
+    "type": "",
+    "version" : "1.0.0",
+    "dependencies" : {
+        "pip": [],
+        "skills": ["approach_to_something", "0.6.1.dev0"]
+    },
+    "repository": {
+        "type": "git",
+        "url": ""
+    },
+    "license": "MIT",
+    "author": {
+        "name": "Kai Geronik",
+        "url": "kai@unlimited-robotics.com"
+    }
+}
