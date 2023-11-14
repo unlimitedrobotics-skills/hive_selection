@@ -38,7 +38,6 @@ class SkillHiveSelection(RayaFSMSkill):
     
     DEFAULT_SETUP_ARGS = {
         'fsm_log_transitions': True,
-        'identifier': 'blablabla',
         'arm_name' : 'right_arm',
         'tag_families' : ['tag36h11.43','tag36h11.1']
     }
@@ -48,6 +47,7 @@ class SkillHiveSelection(RayaFSMSkill):
     ]
 
     DEFAULT_EXECUTE_ARGS = {
+        'identifier': [2],
         'distance_to_goal' : 0.75
     }
 
@@ -57,7 +57,7 @@ class SkillHiveSelection(RayaFSMSkill):
     STATES = [
         'DEBUG_STATE',
         'NAVIGATING_TO_CART',
-        'APPROACHING_CART',
+        'APPROACHING_HIVE',
         'DETECTING_TAGS_1',
         'MOVING_SIDEWAYS',
         'DETECTING_TAGS_2',
@@ -75,7 +75,7 @@ class SkillHiveSelection(RayaFSMSkill):
     STATES_TIMEOUTS = {'DETECTING_TAGS_1' :
                        (NO_TARGET_TIMEOUT, ERROR_TAG_NOT_FOUND)}
 
-    debug = True
+    debug = False
     if debug is True:
         INITIAL_STATE = 'DEBUG_STATE'
 
@@ -497,14 +497,15 @@ class SkillHiveSelection(RayaFSMSkill):
         '''Action used to navigate to the cart'''
         await self.navigation.navigate_to_position(x = NAV_POINT_CART['x'],
                                                    y = NAV_POINT_CART['y'],
-                                                   angle = self.execute_args['angle_to_goal'],
+                                                   #angle = self.execute_args['angle_to_goal'],
+                                                   angle = 45.0,
                                                    pos_unit = POSITION_UNIT.METERS,
                                                    ang_unit = ANGLE_UNIT.DEGREES,
                                                    wait = True)
 
 
 
-    async def enter_APPROACHING_CART(self):
+    async def enter_APPROACHING_HIVE(self):
         '''Action used to execute the approach skill'''
 
         self.approach_successful = False
@@ -512,36 +513,22 @@ class SkillHiveSelection(RayaFSMSkill):
         await self.skill_approach.execute_setup(
              setup_args = {
                 'tags_size' : self.setup_args['tag_size'],
-                'working_cameras' : self.setup_args['working_camera_1'],
+                'working_cameras' : [self.setup_args['working_camera_1']],
+            }
+        )
 
+        await self.skill_approach.execute_main(
+
+            execute_args = {
                 'angle_to_goal' : self.execute_args['angle_to_goal'],
                 'distance_to_goal': self.execute_args['distance_to_goal'],
+                'identifier': self.execute_args['identifier'],
                 'linear_velocity': 0.06,
                 'max_x_error_allowed': 0.03,
                 'max_y_error_allowed': 0.02,
                 'max_angle_error_allowed' : 3.0,
                 'min_correction_distance': 0.1,
             },
-            # setup_args = {
-            #     'working_camera' : self.setup_args['working_camera'],
-            #     'map_name': self.setup_args['map_name'],
-            #     'predictor' : 'apriltags',
-            #     'identifier': self.setup_args['identifier']
-            # }
-
-
-        )
-
-        await self.skill_approach.execute_main(
-            # execute_args = {
-            #     'angle_to_goal' : self.execute_args['angle_to_goal'],
-            #     'distance_to_goal': self.execute_args['distance_to_goal'],
-            #     'linear_velocity': 0.06,
-            #     'max_x_error_allowed': 0.03,
-            #     'max_y_error_allowed': 0.02,
-            #     'max_angle_error_allowed' : 3.0,
-            #     'min_correction_distance': 0.1,
-            # },
             wait = False,
             callback_feedback = self.skill_callback_feedback,
             callback_done = self.skill_callback_done
@@ -676,7 +663,7 @@ class SkillHiveSelection(RayaFSMSkill):
         await self.check_navigation_success()
         if self.navigation_successful:
             self.navigation_successful = False
-            self.set_state('APPROACHING_CART')
+            self.set_state('APPROACHING_HIVE')
 
         else:
             self.navigation_counter += 1
@@ -686,8 +673,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
 
-    async def transition_from_APPROACHING_CART(self):
-        await self.check_approach_success()
+    async def transition_from_APPROACHING_HIVE(self):
         if self.approach_successful:
             self.approach_successful = False
             current_position = await self.navigation.get_position(
@@ -701,7 +687,7 @@ class SkillHiveSelection(RayaFSMSkill):
             self.approach_counter += 1
             if self.approach_counter >= MAX_APPROACH_ATTEMPTS:
                 self.abort(*ERROR_COULDNT_APPROACH_CART)
-            self.set_state('APPROACHING_CART')
+            self.set_state('APPROACHING_HIVE')
 
     
 
