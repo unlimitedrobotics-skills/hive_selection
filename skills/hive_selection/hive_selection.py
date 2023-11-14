@@ -29,7 +29,8 @@ class SkillHiveSelection(RayaFSMSkill):
     ###------------------------------ SKILL ------------------------------###
 
     REQUIRED_SETUP_ARGS = [
-        'working_camera',
+        'working_camera_1',
+        'working_camera_2',
         'map_name',
         'item_name',
         'tag_size',
@@ -101,9 +102,11 @@ class SkillHiveSelection(RayaFSMSkill):
         self.sound = await self.get_controller('sound')
         self.log.info('Sound controller - Enabled')
 
-        # Enable camera
-        self.log.info(f"Enabling camera {self.setup_args['working_camera']}...")
-        await self.cameras.enable_color_camera(self.setup_args['working_camera'])
+        # Enable cameras
+        self.log.info(f"Enabling camera {self.setup_args['working_camera_1']}...")
+        await self.cameras.enable_color_camera(self.setup_args['working_camera_1'])
+        self.log.info(f"Enabling camera {self.setup_args['working_camera_2']}...")
+        await self.cameras.enable_color_camera(self.setup_args['working_camera_2'])
         
         # Set map
         self.log.info(f"Localizing in map: {self.setup_args['map_name']}...")
@@ -134,7 +137,7 @@ class SkillHiveSelection(RayaFSMSkill):
         self.convertion_dict = {'water bottle' : 1, # Dict to convert item name
                                 'towel' : 4,        # to apriltag number
                                 'pajamas' : 3}
-        self.tag = self.convertion_dict[self.setup_args['item_name']] # Tag number
+        self.tag_id = self.convertion_dict[self.setup_args['item_name']] # Tag number
         self.navigation_successful = False  # Navigation success flag
         self.approach_successful = False    # Approach success flag
         self.tag_x = None                   # x of the tag (from baselink)
@@ -314,7 +317,7 @@ class SkillHiveSelection(RayaFSMSkill):
         self.trex_pose = {
             'x' : self.tag_x + RIGHT_ARM_OFFSET['x'] - 0.1,
             'y' : self.tag_y + RIGHT_ARM_OFFSET['y'],
-            'z' : self.tag_z + RIGHT_ARM_OFFSET['z'] + 0.08,
+            'z' : self.tag_z + RIGHT_ARM_OFFSET['z'] + 0.1,
             'roll' : 0,
             'pitch' : 0,
             'yaw' : 0
@@ -332,15 +335,15 @@ class SkillHiveSelection(RayaFSMSkill):
 
     def pixels2meters(self):
         '''Calculate the distance to move sideways from the console'''
-        if self.tag in self.detections_dict:
+        if self.tag_id in self.detections_dict:
 
             # Convert camera pixels to meters in the current position
             #!!left/right in this position is the X axis for the camera but
             # the Y axis for the base link axes system, hence the names below!!
-            x_cam_detection_pix = self.detections_dict[self.tag]['object_center_px'][1]
+            x_cam_detection_pix = self.detections_dict[self.tag_id]['object_center_px'][1]
             x_cam_center_dist_pix = abs(MAX_CAMERA_PIXELS_X/2 - x_cam_detection_pix)
             x_cam_edge_dist_pix = abs(MAX_CAMERA_PIXELS_X - x_cam_detection_pix)
-            y_base_dist_meters = self.detections_dict[self.tag]['center_point'][1]
+            y_base_dist_meters = self.detections_dict[self.tag_id]['center_point'][1]
             pix_meters_ratio = abs(y_base_dist_meters / x_cam_center_dist_pix)
 
             # Distance so that the tag would be on the edge of the screen
@@ -375,7 +378,9 @@ class SkillHiveSelection(RayaFSMSkill):
         self.tag_x, self.tag_y, self.tag_z = None, None, None
 
 
+
     def create_dict_arg(self, arg_list):
+        '''Taken from pyraya_examples/cv_tags'''
         dict_r = {}
         for dt in arg_list:
             if dt.split('.')[0] in dict_r:
@@ -384,6 +389,46 @@ class SkillHiveSelection(RayaFSMSkill):
                 dict_r[dt.split('.')[0]] = [int(dt.split('.')[1])]
 
         return dict_r
+    
+
+    async def choose_next_target(self, n_rows = None, n_cols = None):
+        '''Choose the cell from which to take the item'''
+
+        # Get the current detections
+        tags_dict = {}
+        detected_ids = []
+        tags = self.predictor_handler.get_current_detections()
+
+        # Put the relevant info (id and position) in a dict, if more than one
+        # tag is detected, add a residual id (e.g 4.1, 4.2...)
+        for tag in tags:
+            current_id = tag['tag_id']
+            if current_id == self.tag_id:
+                current_position = [tag['pose_base_link'].pose.position.x,
+                                    tag['pose_base_link'].pose.position.y,
+                                    tag['pose_base_link'].pose.position.z]
+                detected_ids.append(current_id)
+                residual_id = detected_ids.count(current_id) - 1
+                tags_dict[f'{current_id}.{residual_id}'] = current_position
+
+        # Sort the tags based on their y axis location (in ascending order)
+        if len(tags_dict) > 0:
+            sorted_tags = sorted(
+                    tags_dict.items(),
+                    key = lambda point: (round(point[1][1], 1), point[1][0]))
+
+            # Choose the next target (go from right to left and from front to back)
+            chosen_tag = sorted_tags[0]
+
+            if n_rows and n_cols:
+                chosen_col = len(sorted_tags) // n_rows + 1
+                chosen_row = len(sorted_tags) % n_cols + 1
+
+            return chosen_tag, [chosen_row, chosen_col]
+
+        else:
+            return [1,1]
+
 
     ###----------------------------- CALLBACKS -----------------------------###
 
@@ -429,10 +474,10 @@ class SkillHiveSelection(RayaFSMSkill):
                 tag_id = pred['tag_id']
                 self.detections_dict[tag_id] = pred
 
-            if self.tag in self.detections_dict:
-                self.tag_x = self.detections_dict[self.tag]['pose_base_link'].pose.position.x
-                self.tag_y = self.detections_dict[self.tag]['pose_base_link'].pose.position.y
-                self.tag_z = self.detections_dict[self.tag]['pose_base_link'].pose.position.z
+            if self.tag_id in self.detections_dict:
+                self.tag_x = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.x
+                self.tag_y = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.y
+                self.tag_z = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.z
                 self.tags_detected = True
 
 
@@ -467,7 +512,7 @@ class SkillHiveSelection(RayaFSMSkill):
         await self.skill_approach.execute_setup(
              setup_args = {
                 'tags_size' : self.setup_args['tag_size'],
-                'working_cameras' : self.setup_args['working_camera'],
+                'working_cameras' : self.setup_args['working_camera_1'],
 
                 'angle_to_goal' : self.execute_args['angle_to_goal'],
                 'distance_to_goal': self.execute_args['distance_to_goal'],
@@ -517,7 +562,7 @@ class SkillHiveSelection(RayaFSMSkill):
         self.predictor_handler = await self.cv.enable_model(
                 model = 'detector',type = 'tag',
                 name = 'apriltags', 
-                source = self.setup_args['working_camera'],
+                source = self.setup_args['working_camera_2'],
                 model_params = {
                 'families' : 'tag36h11',
                 'nthreads' : 4,
@@ -595,7 +640,7 @@ class SkillHiveSelection(RayaFSMSkill):
         self.predictor_handler = await self.cv.enable_model(
                 model = 'detector',type = 'tag',
                 name = 'apriltags', 
-                source = self.setup_args['working_camera'],
+                source = self.setup_args['working_camera_2'],
                 model_params = {
                 'families' : 'tag36h11',
                 'nthreads' : 4,
@@ -732,8 +777,11 @@ class SkillHiveSelection(RayaFSMSkill):
         self.reset_detections()
         await self.sleep(1.5)
         if self.tags_detected:
+
+            await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
+
             self.tags_detected = False
-            self.set_state('POSITION_ARM')
+            self.set_state('END')
         
         elif (time.time() - self.detection_start_time) > NO_TARGET_TIMEOUT:
             self.abort(*ERROR_TAG_NOT_FOUND)

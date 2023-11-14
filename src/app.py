@@ -11,7 +11,8 @@ class RayaApplication(RayaApplicationBase):
         self.hive_selection = self.register_skill(SkillHiveSelection)
         await self.hive_selection.execute_setup(
             setup_args = {
-                'working_camera' : self.camera,
+                'working_camera_1' : self.camera_1,
+                'working_camera_2' : self.camera_2,
                 'map_name' : self.map_name,
                 'item_name' : self.item_name,
                 'tag_size' : self.tag_size
@@ -38,11 +39,17 @@ class RayaApplication(RayaApplicationBase):
         self.log.debug(feedback)
 
     def get_arguments(self):
-        self.camera = self.get_argument('-c', '--camera', 
+        self.camera_1 = self.get_argument('-c1', '--camera1', 
                 type = str, 
                 required = True,
-                help = 'name of camera to use'
-            )   
+                help = 'name of camera to use on approach'
+            )
+
+        self.camera_2 = self.get_argument('-c2', '--camera2', 
+                type = str, 
+                required = True,
+                help = 'name of camera to use on detection'
+            )      
         
         self.angle_to_goal = self.get_argument('-a', '--angle', 
                 type = float, 
