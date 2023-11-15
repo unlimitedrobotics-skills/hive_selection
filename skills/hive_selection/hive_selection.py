@@ -43,12 +43,13 @@ class SkillHiveSelection(RayaFSMSkill):
     }
 
     REQUIRED_EXECUTE_ARGS = [
-        'angle_to_goal'
+        'angle_to_goal',
+        'identifier'
     ]
 
     DEFAULT_EXECUTE_ARGS = {
         'identifier': [2],
-        'distance_to_goal' : 0.75
+        'distance_to_goal' : 0.70
     }
 
 
@@ -56,7 +57,8 @@ class SkillHiveSelection(RayaFSMSkill):
 
     STATES = [
         'DEBUG_STATE',
-        'NAVIGATING_TO_CART',
+        'IDLE',
+        'NAVIGATING_TO_HIVE',
         'APPROACHING_HIVE',
         'DETECTING_TAGS_1',
         'MOVING_SIDEWAYS',
@@ -66,7 +68,7 @@ class SkillHiveSelection(RayaFSMSkill):
         'END'
     ]
 
-    INITIAL_STATE = 'NAVIGATING_TO_CART'
+    INITIAL_STATE = 'NAVIGATING_TO_HIVE'
 
     END_STATES = [
         'END'
@@ -75,9 +77,10 @@ class SkillHiveSelection(RayaFSMSkill):
     STATES_TIMEOUTS = {'DETECTING_TAGS_1' :
                        (NO_TARGET_TIMEOUT, ERROR_TAG_NOT_FOUND)}
 
-    debug = False
+    debug = True
     if debug is True:
-        INITIAL_STATE = 'DEBUG_STATE'
+        #INITIAL_STATE = 'DEBUG_STATE'
+        INITIAL_STATE = 'APPROACHING_HIVE'
 
     ###--------------------------- SKILL METHODS ---------------------------###
 
@@ -134,23 +137,27 @@ class SkillHiveSelection(RayaFSMSkill):
         '''Setup initial variables'''
 
         # General variables
-        self.convertion_dict = {'water bottle' : 1, # Dict to convert item name
-                                'towel' : 4,        # to apriltag number
+        self.convertion_dict = {'bottle' : 4, # Dict to convert item name
+                                'towel' : 1,        # to apriltag number
                                 'pajamas' : 3}
         self.tag_id = self.convertion_dict[self.setup_args['item_name']] # Tag number
         self.navigation_successful = False  # Navigation success flag
         self.approach_successful = False    # Approach success flag
-        self.tag_x = None                   # x of the tag (from baselink)
-        self.tag_y = None                   # y of the tag (from baselink)
-        self.tag_z = None                   # z of the tag (from baselink)
+        self.target_x = None                # x of the tag (from baselink)
+        self.target_y = None                # y of the tag (from baselink)
+        self.target_z = None                # z of the tag (from baselink)
         self.navigation_counter = 0         # Navigation attempts counter
         self.position_attempts = 0          # Arm position attempts counter
+        self.pickup_attempts = 0            # Item pickup attempts counter
         self.approach_final_linear = 0      # Approach final linear step
         self.approach_angle_error = 0       # Approach final angle error
         self.approach_counter = 0           # Counter for the approach attempts
         self.sideways_distance = 0          # Sideways distance to move
         self.detections_dict = {}           # Dictionary to store detections
         self.tags_detected = False          # Flag whether tags are detected
+        self.num_detections = 0             # Number of detections in hive
+        self.dynamic_trex = [0, 0, 0]       # Position after dynamic trex func
+        self.closest_tag_x = 0              # Closest tag (on X axis)
         self.tags_info = self.create_dict_arg(self.setup_args['tag_families'])
 
 
@@ -267,10 +274,12 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
     async def return_arm_home(self):
+        await self.static_trex_position()
         await self.arms.set_predefined_pose(
                                 arm = self.arm_name,
                                 predefined_pose = 'home',
                                 callback_feedback = self.arms_callback_feedback,
+                                use_obstacles = True,
                                 wait = True)
 
         await self.gripper_command('open')
@@ -308,22 +317,22 @@ class SkillHiveSelection(RayaFSMSkill):
             wait=True)
 
         self.static_trex_pose = await self.arms.get_current_pose(self.arm_name)
-        self.trex_position = self.static_trex_pose['position']
+        self.static_trex = self.static_trex_pose['position']
 
 
 
-    async def dynamic_trex_position(self):
+    async def dynamic_trex_position(self, pickup_height = 0):
         '''Position arm in trex position'''
         self.trex_pose = {
-            'x' : self.tag_x + RIGHT_ARM_OFFSET['x'] - 0.1,
-            'y' : self.tag_y + RIGHT_ARM_OFFSET['y'],
-            'z' : self.tag_z + RIGHT_ARM_OFFSET['z'] + 0.1,
-            'roll' : 0,
-            'pitch' : 0,
-            'yaw' : 0
+        'x' : self.target_x + RIGHT_ARM_OFFSET['x'] + CELL_SIZE_X,
+        'y' : self.target_y + RIGHT_ARM_OFFSET['y'],
+        'z' : self.target_z + RIGHT_ARM_OFFSET['z'] + CELL_SIZE_Z + pickup_height,
+        'roll' : 0,
+        'pitch' : 0,
+        'yaw' : 0
         }
         
-        self.trex_position = [self.trex_pose['x'],
+        self.dynamic_trex = [self.trex_pose['x'],
                               self.trex_pose['y'],
                               self.trex_pose['z']]
 
@@ -375,7 +384,7 @@ class SkillHiveSelection(RayaFSMSkill):
         '''Reset the detections'''
         self.tags_detected = False
         self.detections_dict = {}
-        self.tag_x, self.tag_y, self.tag_z = None, None, None
+        self.target_x, self.target_y, self.target_z = None, None, None
 
 
 
@@ -412,22 +421,33 @@ class SkillHiveSelection(RayaFSMSkill):
                 tags_dict[f'{current_id}.{residual_id}'] = current_position
 
         # Sort the tags based on their y axis location (in ascending order)
+        # and if the y axis ties then based on the x axis (in descending order)
         if len(tags_dict) > 0:
             sorted_tags = sorted(
                     tags_dict.items(),
-                    key = lambda point: (round(point[1][1], 1), point[1][0]))
+                    key = lambda point: (round(point[1][1], 1), -point[1][0]))
+            
+            self.closest_tag_x = min(tags_dict.items(),
+                                key = lambda point: point[1][0])[1][0]
 
             # Choose the next target (go from right to left and from front to back)
+            num_detections = len(sorted_tags)
             chosen_tag = sorted_tags[0]
 
             if n_rows and n_cols:
-                chosen_col = len(sorted_tags) // n_rows + 1
-                chosen_row = len(sorted_tags) % n_cols + 1
+                chosen_col = len(sorted_tags) // n_rows - n_cols + 2
+                chosen_row = (len(sorted_tags) - n_cols) % n_cols + 1
 
-            return chosen_tag, [chosen_row, chosen_col]
+            else:
+                chosen_col, chosen_row = None, None
+        
+        next_target = {'tag' : chosen_tag,
+                       'num_detections' : num_detections,
+                       'row' : chosen_row,
+                       'col' : chosen_col}
 
-        else:
-            return [1,1]
+        return next_target
+
 
 
     ###----------------------------- CALLBACKS -----------------------------###
@@ -475,9 +495,9 @@ class SkillHiveSelection(RayaFSMSkill):
                 self.detections_dict[tag_id] = pred
 
             if self.tag_id in self.detections_dict:
-                self.tag_x = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.x
-                self.tag_y = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.y
-                self.tag_z = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.z
+                # self.target_x = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.x
+                # self.target_y = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.y
+                # self.target_z = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.z
                 self.tags_detected = True
 
 
@@ -493,12 +513,12 @@ class SkillHiveSelection(RayaFSMSkill):
 
     ###------------------------------ ACTIONS ------------------------------###
 
-    async def enter_NAVIGATING_TO_CART(self):
+    async def enter_NAVIGATING_TO_HIVE(self):
         '''Action used to navigate to the cart'''
         await self.navigation.navigate_to_position(x = NAV_POINT_CART['x'],
                                                    y = NAV_POINT_CART['y'],
                                                    #angle = self.execute_args['angle_to_goal'],
-                                                   angle = 45.0,
+                                                   angle = 40.0,
                                                    pos_unit = POSITION_UNIT.METERS,
                                                    ang_unit = ANGLE_UNIT.DEGREES,
                                                    wait = True)
@@ -527,7 +547,7 @@ class SkillHiveSelection(RayaFSMSkill):
                 'max_x_error_allowed': 0.03,
                 'max_y_error_allowed': 0.02,
                 'max_angle_error_allowed' : 3.0,
-                'min_correction_distance': 0.1,
+                'min_correction_distance': 0.3,
             },
             wait = False,
             callback_feedback = self.skill_callback_feedback,
@@ -594,7 +614,6 @@ class SkillHiveSelection(RayaFSMSkill):
 
     async def enter_POSITION_ARM(self):
         '''Action used to position the arm before grabbing the item'''
-        
         # Try to position the arm dynamically (according to tags location)
         try:
             await self.static_trex_position()
@@ -602,25 +621,32 @@ class SkillHiveSelection(RayaFSMSkill):
 
         # Try to position the arm statically (according to const joints values)
         except Exception as e:
-            self.log.debug("Couldn't perform dynamic trex positioning. \
-                           Performing static trex positioning...")
-            try:
-                await self.static_trex_position()
-
-            except Exception as e:
-                await self.return_arm_home()
-                if self.position_attempts > MAX_POSITION_ATTEMPTS:
-                    self.log.warn(f'ERROR IN enter_POSITION_ARM - {e}')
-                    self.abort(*ERROR_COULDNT_POSITION_ARM)
+            self.log.warn(f'Couldnt POSITION_ARM - {e}. \
+                          Attempts: {self.position_attempts}...')
 
     
 
     async def enter_PICK_ITEM(self):
-        pass
+        await self.gripper_command('close')
+        #await self.dynamic_trex_position(pickup_height = PICKUP_HEIGHT)
+        
+        await self.arms.set_joint_position(arm = self.arm_name,
+                                           joint = 'arm_right_shoulder_rail_joint',
+                                           position = 0.0,
+                                           wait = True)
+
+
+
+    async def enter_IDLE(self):
+        self.log.debug(f'Setting next state {self.next_state} ')
 
 
 #--------------------------------- DEBUG ------------------------------------#
     async def enter_DEBUG_STATE(self):
+
+        await self.gripper_command('open')
+        await self.return_arm_home()
+
          # Enable model
         self.log.info('Enabling apriltags model...')
 
@@ -659,7 +685,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
     ###---------------------------- TRANSITIONS ----------------------------###
     
-    async def transition_from_NAVIGATING_TO_CART(self):
+    async def transition_from_NAVIGATING_TO_HIVE(self):
         await self.check_navigation_success()
         if self.navigation_successful:
             self.navigation_successful = False
@@ -669,7 +695,7 @@ class SkillHiveSelection(RayaFSMSkill):
             self.navigation_counter += 1
             if self.navigation_counter >= MAX_NAVIGATION_ATTEMPTS:
                 self.abort(*ERROR_COULDNT_REACH_DESTINATION)
-            self.set_state('NAVIGATING_TO_CART')
+            self.set_state('NAVIGATING_TO_HIVE')
 
 
 
@@ -738,36 +764,67 @@ class SkillHiveSelection(RayaFSMSkill):
     async def transition_from_POSITION_ARM(self):
         current_pose = await self.arms.get_current_pose(self.arm_name)
         current_position = np.array(current_pose['position'])
-        if all(abs(current_position - self.trex_position) <= ARM_ERROR_THRESHOLD):
+        if all(abs(current_position - self.dynamic_trex) <= ARM_ERROR_THRESHOLD):
             self.set_state('PICK_ITEM')
 
         else:
             self.position_attempts += 1
-            if self.position_attempts == MAX_POSITION_ATTEMPTS:
-                self.abort(*ERROR_ARM_POSITION_NOT_ACCURATE)
-            else:
-                self.position_attempts = 0
-                self.set_state('POSITION_ARM')
+
+            if self.position_attempts > MAX_POSITION_ATTEMPTS:
+                await self.return_arm_home()
+                self.abort(*ERROR_COULDNT_POSITION_ARM)
+
+            self.next_state = 'POSITION_ARM'
+            self.set_state('IDLE')
+
+            #self.set_state('POSITION_ARM')
 
 
 
     async def transition_from_PICK_ITEM(self):
-        await self.static_trex_position()
-        await self.return_arm_home()
-        self.set_state('END')
+        await self.sleep(2.0)
+        current_target = await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
+        if current_target['num_detections'] - self.num_detections == 1:
+            await self.send_feedback('Pickup confirmed!')
+            await self.send_feedback(f'Moving backwards: \
+                            {0.15 + self.closest_tag_x - self.target_x} meters')
+            await self.motion.move_linear(
+                    distance = 0.15 + abs(self.closest_tag_x - self.target_x),
+                    x_velocity = -0.05,
+                    enable_obstacles = False,
+                    wait = True)
+            await self.static_trex_position()
+            self.set_state('END')
+
+        else:
+            self.pickup_attempts += 1
+            if self.pickup_attempts > MAX_PICKUP_ATTEMPTS:
+                await self.return_arm_home()
+                self.abort(*ERROR_COULDNT_PICKUP_ITEM)
+
+            await self.gripper_command('open')
+            self.next_state = 'POSITION_ARM'
+            self.set_state('IDLE')
+            #self.set_state('PICK_ITEM')
 
 
+
+    async def transition_from_IDLE(self):
+        self.set_state(self.next_state)
 
 #--------------------------------- DEBUG ------------------------------------#
     async def transition_from_DEBUG_STATE(self):
         self.reset_detections()
         await self.sleep(1.5)
         if self.tags_detected:
-
-            await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
-
-            self.tags_detected = False
-            self.set_state('END')
+            self.tags_detected = False 
+            self.target = await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
+            self.num_detections = self.target['num_detections']
+            self.target_x = self.target['tag'][1][0]
+            self.target_y = self.target['tag'][1][1]
+            self.target_z = self.target['tag'][1][2]
+            await self.send_feedback(self.target)
+            self.set_state('POSITION_ARM')
         
         elif (time.time() - self.detection_start_time) > NO_TARGET_TIMEOUT:
             self.abort(*ERROR_TAG_NOT_FOUND)

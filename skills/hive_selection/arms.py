@@ -2,7 +2,7 @@ GRIPPER_COMMANDS = {
 
     'close': {
         'arm': 'both',
-        'desired_position': 1.0,
+        'desired_position': 0.85,
         'desired_pressure': 0.8,
     },
 
@@ -24,13 +24,12 @@ JOINT_NAMES = [
                 "arm_right_wrist_joint"
             ]
 
-TREX_POSITION_ANGLES =  [0.0, 0.0, 0.0, 0.0, 1.8, 0.0, -0.25, -1.57]
+TREX_POSITION_ANGLES =  [0.0, 0.0, 0.0, 0.0, 2.1, 0.0, -0.5, -1.57]
 
 # Gary 13 right arm
 RIGHT_ARM_OFFSET = {'x' : -0.04,
-                    'y' : 0.0,
+                    'y' : 0.05,
                     'z' : 0.0065}
 
 ARM_ERROR_THRESHOLD = [0.03, 0.03, 0.03]
-
 

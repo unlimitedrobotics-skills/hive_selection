@@ -19,11 +19,16 @@ class RayaApplication(RayaApplicationBase):
             }
         )
 
+        self.item_dict = {'bottle' : 4,
+                          'towel' : 2}
+        self.log.debug(f'IDENTIFIER: [{self.item_dict[self.item_name]}]')
+
 
     async def main(self):
         execute_results = await self.hive_selection.execute_main(
             execute_args = {
-                'angle_to_goal' : self.angle_to_goal
+                'angle_to_goal' : self.angle_to_goal,
+                'identifier' : [self.item_dict[self.item_name]]
             },
             callback_feedback = self.cb_feedback
         )
