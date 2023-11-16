@@ -21,7 +21,6 @@ class RayaApplication(RayaApplicationBase):
 
         self.item_dict = {'bottle' : 4,
                           'towel' : 2}
-        self.log.debug(f'IDENTIFIER: [{self.item_dict[self.item_name]}]')
 
 
     async def main(self):

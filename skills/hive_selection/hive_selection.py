@@ -49,7 +49,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
     DEFAULT_EXECUTE_ARGS = {
         'identifier': [2],
-        'distance_to_goal' : 0.70
+        'distance_to_goal' : 0.68
     }
 
 
@@ -65,6 +65,7 @@ class SkillHiveSelection(RayaFSMSkill):
         'DETECTING_TAGS_2',
         'POSITION_ARM',
         'PICK_ITEM',
+        'NAVIGATING_TO_PATIENT',
         'END'
     ]
 
@@ -79,8 +80,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
     debug = True
     if debug is True:
-        #INITIAL_STATE = 'DEBUG_STATE'
-        INITIAL_STATE = 'APPROACHING_HIVE'
+        INITIAL_STATE = 'DEBUG_STATE'
 
     ###--------------------------- SKILL METHODS ---------------------------###
 
@@ -108,10 +108,11 @@ class SkillHiveSelection(RayaFSMSkill):
         # Enable cameras
         self.log.info(f"Enabling camera {self.setup_args['working_camera_1']}...")
         await self.cameras.enable_color_camera(self.setup_args['working_camera_1'])
-        self.log.info(f"Enabling camera {self.setup_args['working_camera_2']}...")
-        await self.cameras.enable_color_camera(self.setup_args['working_camera_2'])
-        
-        # Set map
+        if self.setup_args['working_camera_1'] != self.setup_args['working_camera_2']:
+            self.log.info(f"Enabling camera {self.setup_args['working_camera_2']}...")
+            await self.cameras.enable_color_camera(self.setup_args['working_camera_2'])
+            
+        # Set map and localize
         self.log.info(f"Localizing in map: {self.setup_args['map_name']}...")
         await self.navigation.set_map(
             map_name = self.setup_args['map_name'],
@@ -136,10 +137,16 @@ class SkillHiveSelection(RayaFSMSkill):
     def setup_variables(self):
         '''Setup initial variables'''
 
-        # General variables
-        self.convertion_dict = {'bottle' : 4, # Dict to convert item name
-                                'towel' : 1,        # to apriltag number
+        # Item to tag number conversion dict
+        self.convertion_dict = {'bottle' : 4, 
+                                'towel' : 1,      
                                 'pajamas' : 3}
+        
+        # Gripper status dict for gripper commands (open / close / other)
+        self.gripper_status_dict = {'success' : None,
+                                    'obstacles' : None,
+                                    'position' : None}   
+         
         self.tag_id = self.convertion_dict[self.setup_args['item_name']] # Tag number
         self.navigation_successful = False  # Navigation success flag
         self.approach_successful = False    # Approach success flag
@@ -157,7 +164,7 @@ class SkillHiveSelection(RayaFSMSkill):
         self.tags_detected = False          # Flag whether tags are detected
         self.num_detections = 0             # Number of detections in hive
         self.dynamic_trex = [0, 0, 0]       # Position after dynamic trex func
-        self.closest_tag_x = 0              # Closest tag (on X axis)
+        self.closest_tag_x = 0              # Closest tag (on X axis)  
         self.tags_info = self.create_dict_arg(self.setup_args['tag_families'])
 
 
@@ -215,11 +222,18 @@ class SkillHiveSelection(RayaFSMSkill):
     async def gripper_command(self, command):
         """Opens/closes both grippers"""
         try:
+            # Perform gripper command
             self.log.info(f'Gripper command \'{command}\'...')
-            await self.arms.gripper_cmd(
-                **(GRIPPER_COMMANDS[command]),
-                wait=True,
-            )
+            current_gripper_status = await self.arms.gripper_cmd(
+                                    **(GRIPPER_COMMANDS[command]),
+                                    wait=True,
+                                )
+            
+            # Save the command log in a dict
+            self.gripper_status_dict['success'] = current_gripper_status[0]
+            self.gripper_status_dict['obstacles'] = current_gripper_status[1]
+            self.gripper_status_dict['position'] = current_gripper_status[3]
+
         except Exception as e:
             print(e)
         await self.sleep(2)
@@ -303,7 +317,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
     async def static_trex_position(self):
-        '''Position arm in trex position'''
+        '''Position arm in predefined trex position according to joints'''
         await self.arms.set_joints_position(
             arm=self.arm_name,
             name_joints=self.joint_names,
@@ -322,7 +336,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
     async def dynamic_trex_position(self, pickup_height = 0):
-        '''Position arm in trex position'''
+        '''Position arm in a planned trex position according to target'''
         self.trex_pose = {
         'x' : self.target_x + RIGHT_ARM_OFFSET['x'] + CELL_SIZE_X,
         'y' : self.target_y + RIGHT_ARM_OFFSET['y'],
@@ -349,30 +363,35 @@ class SkillHiveSelection(RayaFSMSkill):
             # Convert camera pixels to meters in the current position
             #!!left/right in this position is the X axis for the camera but
             # the Y axis for the base link axes system, hence the names below!!
-            x_cam_detection_pix = self.detections_dict[self.tag_id]['object_center_px'][1]
-            x_cam_center_dist_pix = abs(MAX_CAMERA_PIXELS_X/2 - x_cam_detection_pix)
-            x_cam_edge_dist_pix = abs(MAX_CAMERA_PIXELS_X - x_cam_detection_pix)
-            y_base_dist_meters = self.detections_dict[self.tag_id]['center_point'][1]
-            pix_meters_ratio = abs(y_base_dist_meters / x_cam_center_dist_pix)
+            # x_cam_detection_pix = self.detections_dict[self.tag_id]['object_center_px'][1]
+            # x_cam_center_dist_pix = abs(MAX_CAMERA_PIXELS_X/2 - x_cam_detection_pix)
+            # x_cam_edge_dist_pix = abs(MAX_CAMERA_PIXELS_X - x_cam_detection_pix)
+            # y_base_dist_meters = self.detections_dict[self.tag_id]['center_point'][1]
+            # pix_meters_ratio = abs(y_base_dist_meters / x_cam_center_dist_pix)
 
             # Distance so that the tag would be on the edge of the screen
-            side_linear = float(x_cam_edge_dist_pix * pix_meters_ratio)
+            # side_linear = float(x_cam_edge_dist_pix * pix_meters_ratio)
 
             # Semi automatic correction in case of inaccuracies
-            if side_linear > 0.4  or side_linear < 0.275:
-                side_linear =  0.32 + y_base_dist_meters
-            
-                return side_linear
+            #if side_linear > 0.4  or side_linear < 0.275:
+
+            side_linear =  0.32 #+ y_base_dist_meters
+        
+            return side_linear
 
 
 
-    async def check_navigation_success(self):
+    async def check_navigation_success(self, nav_point):
+        '''Check that the robot is indeed in the correct location'''
+
+        # Get the current position
         robot_meter_deg = await self.navigation.get_position(
                                                 pos_unit=POSITION_UNIT.METERS,
                                                 ang_unit=ANGLE_UNIT.DEGREES)
         
-        if np.sqrt(((robot_meter_deg[0]) - NAV_POINT_CART['x'])**2 + \
-            (robot_meter_deg[1] - NAV_POINT_CART['y'])**2) <= NAVIGATION_THRESHOLD:
+        # Check if its close enough to the desired position
+        if np.sqrt(((robot_meter_deg[0]) - nav_point['x'])**2 + \
+            (robot_meter_deg[1] - nav_point['y'])**2) <= NAVIGATION_THRESHOLD:
             self.navigation_successful = True
 
         else:
@@ -434,6 +453,10 @@ class SkillHiveSelection(RayaFSMSkill):
             num_detections = len(sorted_tags)
             chosen_tag = sorted_tags[0]
 
+            # The number of rows and columns are not required inputs but if
+            # are, and the items in the hive were indeed taken according to
+            # the predefined order, the function also returns the information
+            # of the column and row its going to choose the next target from.
             if n_rows and n_cols:
                 chosen_col = len(sorted_tags) // n_rows - n_cols + 2
                 chosen_row = (len(sorted_tags) - n_cols) % n_cols + 1
@@ -495,9 +518,6 @@ class SkillHiveSelection(RayaFSMSkill):
                 self.detections_dict[tag_id] = pred
 
             if self.tag_id in self.detections_dict:
-                # self.target_x = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.x
-                # self.target_y = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.y
-                # self.target_z = self.detections_dict[self.tag_id]['pose_base_link'].pose.position.z
                 self.tags_detected = True
 
 
@@ -515,19 +535,18 @@ class SkillHiveSelection(RayaFSMSkill):
 
     async def enter_NAVIGATING_TO_HIVE(self):
         '''Action used to navigate to the cart'''
-        await self.navigation.navigate_to_position(x = NAV_POINT_CART['x'],
-                                                   y = NAV_POINT_CART['y'],
-                                                   #angle = self.execute_args['angle_to_goal'],
-                                                   angle = 40.0,
-                                                   pos_unit = POSITION_UNIT.METERS,
-                                                   ang_unit = ANGLE_UNIT.DEGREES,
-                                                   wait = True)
+        await self.navigation.navigate_to_position(
+                                                x = NAV_POINT_HIVE['x'],
+                                                y = NAV_POINT_HIVE['y'],
+                                                angle = NAV_POINT_HIVE['angle'],
+                                                pos_unit = POSITION_UNIT.METERS,
+                                                ang_unit = ANGLE_UNIT.DEGREES,
+                                                wait = True)
 
 
 
     async def enter_APPROACHING_HIVE(self):
         '''Action used to execute the approach skill'''
-
         self.approach_successful = False
         self.log.info('Executing ApproachToTags skill...')
         await self.skill_approach.execute_setup(
@@ -540,14 +559,15 @@ class SkillHiveSelection(RayaFSMSkill):
         await self.skill_approach.execute_main(
 
             execute_args = {
-                'angle_to_goal' : self.execute_args['angle_to_goal'],
+                'angle_to_goal' : 0.0,
                 'distance_to_goal': self.execute_args['distance_to_goal'],
                 'identifier': self.execute_args['identifier'],
                 'linear_velocity': 0.06,
-                'max_x_error_allowed': 0.03,
-                'max_y_error_allowed': 0.02,
+                'max_x_error_allowed': 0.05,
+                'max_y_error_allowed': 0.2,
                 'max_angle_error_allowed' : 3.0,
-                'min_correction_distance': 0.3,
+                'step_size' : 0.25,
+                'min_correction_distance': 0.4,
             },
             wait = False,
             callback_feedback = self.skill_callback_feedback,
@@ -563,6 +583,8 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
     async def enter_DETECTING_TAGS_1(self):
+        '''Start detecting tags'''
+
          # Enable model
         self.log.info('Enabling apriltags model...')
 
@@ -627,18 +649,36 @@ class SkillHiveSelection(RayaFSMSkill):
     
 
     async def enter_PICK_ITEM(self):
-        await self.gripper_command('close')
-        #await self.dynamic_trex_position(pickup_height = PICKUP_HEIGHT)
-        
+        '''Action used to pick up the relevant item'''
+        await self.gripper_command('close')        
         await self.arms.set_joint_position(arm = self.arm_name,
                                            joint = 'arm_right_shoulder_rail_joint',
                                            position = 0.0,
                                            wait = True)
 
+        await self.dynamic_trex_position(pickup_height = PICKUP_HEIGHT)
+
+
+
+    async def enter_NAVIGATING_TO_PATIENT(self):
+        await self.sleep(2.0)
+        # if not self.motion.is_moving():
+        #     await self.motion.rotate(angle = 180,
+        #                              angular_speed = 15,
+        #                              ang_unit = ANGLE_UNIT.DEGREES)
+
+        await self.navigation.navigate_to_position(
+                                            x = NAV_POINT_HOME['x'],
+                                            y = NAV_POINT_HOME['y'],
+                                            angle = NAV_POINT_HOME['angle'],
+                                            pos_unit = POSITION_UNIT.METERS,
+                                            ang_unit = ANGLE_UNIT.DEGREES,
+                                            wait = True)
+        
 
 
     async def enter_IDLE(self):
-        self.log.debug(f'Setting next state {self.next_state} ')
+        self.log.debug(f'Setting next state {self.next_state}')
 
 
 #--------------------------------- DEBUG ------------------------------------#
@@ -686,7 +726,7 @@ class SkillHiveSelection(RayaFSMSkill):
     ###---------------------------- TRANSITIONS ----------------------------###
     
     async def transition_from_NAVIGATING_TO_HIVE(self):
-        await self.check_navigation_success()
+        await self.check_navigation_success(nav_point = NAV_POINT_HIVE)
         if self.navigation_successful:
             self.navigation_successful = False
             self.set_state('APPROACHING_HIVE')
@@ -718,12 +758,12 @@ class SkillHiveSelection(RayaFSMSkill):
     
 
     async def transition_from_DETECTING_TAGS_1(self):
-        await self.sleep(1.5)
+        await self.sleep(2.0)
         if self.tags_detected:
             self.tags_detected = False
-            await self.motion.rotate(angle = self.approach_angle_error,
-                                    angular_speed = 10,
-                                    wait = True)
+            # await self.motion.rotate(angle = self.approach_angle_error,
+            #                         angular_speed = 10,
+            #                         wait = True)
             
             self.sideways_distance = self.pixels2meters()
             await self.send_feedback(
@@ -744,7 +784,8 @@ class SkillHiveSelection(RayaFSMSkill):
     
 
     async def transition_from_MOVING_SIDEWAYS(self):
-        if not self.motion.is_moving(): 
+        if not self.motion.is_moving():
+            #await self.turn_and_burn() 
             self.set_state('DETECTING_TAGS_2')
 
 
@@ -753,7 +794,13 @@ class SkillHiveSelection(RayaFSMSkill):
         self.reset_detections()
         await self.sleep(1.5)
         if self.tags_detected:
-            self.tags_detected = False
+            self.tags_detected = False 
+            self.target = await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
+            self.num_detections = self.target['num_detections']
+            self.target_x = self.target['tag'][1][0]
+            self.target_y = self.target['tag'][1][1]
+            self.target_z = self.target['tag'][1][2]
+            await self.send_feedback(self.target)
             self.set_state('POSITION_ARM')
         
         elif (time.time() - self.detection_start_time) > NO_TARGET_TIMEOUT:
@@ -783,18 +830,27 @@ class SkillHiveSelection(RayaFSMSkill):
 
     async def transition_from_PICK_ITEM(self):
         await self.sleep(2.0)
+
+        # Confirm the pick if 1. You detected an extra tag between before
+        # trying to pick and after, and 2. you detected an obstacle when closing
+        # the gripper
         current_target = await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
-        if current_target['num_detections'] - self.num_detections == 1:
+        if current_target['num_detections'] - self.num_detections == 1 or \
+            self.gripper_status_dict['obstacles'] is True:
             await self.send_feedback('Pickup confirmed!')
             await self.send_feedback(f'Moving backwards: \
                             {0.15 + self.closest_tag_x - self.target_x} meters')
+            
+            # Move backwards
             await self.motion.move_linear(
                     distance = 0.15 + abs(self.closest_tag_x - self.target_x),
                     x_velocity = -0.05,
                     enable_obstacles = False,
                     wait = True)
+            
+            # Take the item closer to center of gravity
             await self.static_trex_position()
-            self.set_state('END')
+            self.set_state('NAVIGATING_TO_PATIENT')
 
         else:
             self.pickup_attempts += 1
@@ -808,9 +864,17 @@ class SkillHiveSelection(RayaFSMSkill):
             #self.set_state('PICK_ITEM')
 
 
+    async def transition_from_NAVIGATING_TO_PATIENT(self):
+        await self.check_navigation_success(nav_point = NAV_POINT_HOME)
+        if self.navigation_successful:
+            self.navigation_successful = False
+            self.set_state('END')
+
 
     async def transition_from_IDLE(self):
         self.set_state(self.next_state)
+
+
 
 #--------------------------------- DEBUG ------------------------------------#
     async def transition_from_DEBUG_STATE(self):
