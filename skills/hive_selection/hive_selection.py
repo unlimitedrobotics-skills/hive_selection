@@ -835,7 +835,7 @@ class SkillHiveSelection(RayaFSMSkill):
         # trying to pick and after, and 2. you detected an obstacle when closing
         # the gripper
         current_target = await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
-        if current_target['num_detections'] - self.num_detections == 1 or \
+        if current_target['num_detections'] - self.num_detections == 1 and \
             self.gripper_status_dict['obstacles'] is True:
             await self.send_feedback('Pickup confirmed!')
             await self.send_feedback(f'Moving backwards: \
