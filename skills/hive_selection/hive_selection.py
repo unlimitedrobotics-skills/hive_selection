@@ -236,7 +236,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
         except Exception as e:
             print(e)
-        await self.sleep(2)
+        await self.sleep(1.5)
 
 
 
@@ -661,11 +661,16 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
     async def enter_NAVIGATING_TO_PATIENT(self):
-        await self.sleep(2.0)
-        # if not self.motion.is_moving():
-        #     await self.motion.rotate(angle = 180,
-        #                              angular_speed = 15,
-        #                              ang_unit = ANGLE_UNIT.DEGREES)
+        await self.sleep(1.5)
+        await self.navigation.update_robot_footprint(PICKUP_FOOTPRINT)
+        await self.send_feedback('Footprint updated...')
+        await self.navigation.navigate_to_position()
+
+
+        if not self.motion.is_moving():
+            await self.motion.rotate(angle = 180,
+                                     angular_speed = 15,
+                                     ang_unit = ANGLE_UNIT.DEGREES)
 
         await self.navigation.navigate_to_position(
                                             x = NAV_POINT_HOME['x'],
@@ -683,43 +688,9 @@ class SkillHiveSelection(RayaFSMSkill):
 
 #--------------------------------- DEBUG ------------------------------------#
     async def enter_DEBUG_STATE(self):
-
         await self.gripper_command('open')
         await self.return_arm_home()
-
-         # Enable model
-        self.log.info('Enabling apriltags model...')
-
-        self.predictor_handler = await self.cv.enable_model(
-                model = 'detector',type = 'tag',
-                name = 'apriltags', 
-                source = self.setup_args['working_camera_2'],
-                model_params = {
-                'families' : 'tag36h11',
-                'nthreads' : 4,
-                'quad_decimate' : 2.0,
-                'quad_sigma': 0.0,
-                'decode_sharpening' : 0.25,
-                'refine_edges' : 1,
-                'tag_size' : self.setup_args['tag_size']
-                }
-            )
-        
-         # Create listeners
-        await self.predictor_handler.find_tags(
-                tags = self.tags_info, 
-                callback = self.callback_specific_tags
-            )
-        
-        self.predictor_handler.set_img_detections_callback(
-                callback = self.callback_predictions,
-                as_dict = True,
-                call_without_detections = True,
-                cameras_controller = self.cameras
-            )
-
-        # Start timer
-        self.detection_start_time = time.time()
+        await self.static_trex_position()
 #--------------------------------- DEBUG ------------------------------------#
 
 
@@ -829,7 +800,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
 
     async def transition_from_PICK_ITEM(self):
-        await self.sleep(2.0)
+        await self.sleep(1.5)
 
         # Confirm the pick if 1. You detected an extra tag between before
         # trying to pick and after, and 2. you detected an obstacle when closing
@@ -878,18 +849,14 @@ class SkillHiveSelection(RayaFSMSkill):
 
 #--------------------------------- DEBUG ------------------------------------#
     async def transition_from_DEBUG_STATE(self):
-        self.reset_detections()
-        await self.sleep(1.5)
-        if self.tags_detected:
-            self.tags_detected = False 
-            self.target = await self.choose_next_target(HIVE_NUM_ROWS, HIVE_NUM_COLS)
-            self.num_detections = self.target['num_detections']
-            self.target_x = self.target['tag'][1][0]
-            self.target_y = self.target['tag'][1][1]
-            self.target_z = self.target['tag'][1][2]
-            await self.send_feedback(self.target)
-            self.set_state('POSITION_ARM')
-        
-        elif (time.time() - self.detection_start_time) > NO_TARGET_TIMEOUT:
-            self.abort(*ERROR_TAG_NOT_FOUND)
+        await self.navigation.update_robot_footprint(PICKUP_FOOTPRINT)
+        await self.send_feedback('Footprint updated...')
+        await self.navigation.navigate_to_position(
+                                            x = NAV_POINT_HIVE['x'],
+                                            y = NAV_POINT_HIVE['y'],
+                                            angle = NAV_POINT_HIVE['angle'],
+                                            pos_unit = POSITION_UNIT.METERS,
+                                            ang_unit = ANGLE_UNIT.DEGREES,
+                                            wait = True) 
+        self.set_state('END')       
 #--------------------------------- DEBUG ------------------------------------#

@@ -23,3 +23,18 @@ MAX_CAMERA_PIXELS_X = 850
 CELL_SIZE_X = 0.08
 CELL_SIZE_Z = 0.065
 PICKUP_HEIGHT = 0.275
+
+NORMAL_FOOTPRINT = [
+        [-0.25,  0.32],
+        [ 0.25,  0.32],
+        [ 0.25, -0.32],
+        [-0.25, -0.32]
+    ]
+
+#TODO: CHANGE TO ACTUAL PICKUP FOOTPRINT
+PICKUP_FOOTPRINT = [
+    [-0.60,  0.60],
+    [ 0.60,  0.60],
+    [ 0.60, -0.60],
+    [-0.60, -0.60]
+]
