@@ -42,13 +42,9 @@ class SkillHiveSelection(RayaFSMSkill):
         'tag_families' : ['tag36h11.43','tag36h11.1']
     }
 
-    REQUIRED_EXECUTE_ARGS = [
-        'angle_to_goal',
-        'identifier'
-    ]
+    REQUIRED_EXECUTE_ARGS = []
 
     DEFAULT_EXECUTE_ARGS = {
-        'identifier': [2],
         'distance_to_goal' : 0.68
     }
 
@@ -137,17 +133,23 @@ class SkillHiveSelection(RayaFSMSkill):
     def setup_variables(self):
         '''Setup initial variables'''
 
-        # Item to tag number conversion dict
-        self.convertion_dict = {'bottle' : 4, 
-                                'towel' : 1,      
-                                'pajamas' : 3}
+        # Item to small tags number conversion dict
+        self.small_tags_convertion_dict = {'bottle' : 4, 
+                                        'towel' : 1,      
+                                        'pajamas' : 3}
         
+        self.big_tags_convertion_dict = {'bottle' : 44,
+                                           'towel' : 11,
+                                           'pajamas' : 33}
+
+
         # Gripper status dict for gripper commands (open / close / other)
         self.gripper_status_dict = {'success' : None,
                                     'obstacles' : None,
                                     'position' : None}   
          
-        self.tag_id = self.convertion_dict[self.setup_args['item_name']] # Tag number
+        self.small_tag_id = self.small_tags_convertion_dict[self.setup_args['item_name']]
+        self.big_tad_id = self.big_tags_convertion_dict[self.setup_args['item_name']]
         self.navigation_successful = False  # Navigation success flag
         self.approach_successful = False    # Approach success flag
         self.target_x = None                # x of the tag (from baselink)
@@ -431,7 +433,7 @@ class SkillHiveSelection(RayaFSMSkill):
         # tag is detected, add a residual id (e.g 4.1, 4.2...)
         for tag in tags:
             current_id = tag['tag_id']
-            if current_id == self.tag_id:
+            if current_id == self.small_tag_id:
                 current_position = [tag['pose_base_link'].pose.position.x,
                                     tag['pose_base_link'].pose.position.y,
                                     tag['pose_base_link'].pose.position.z]
@@ -517,7 +519,7 @@ class SkillHiveSelection(RayaFSMSkill):
                 tag_id = pred['tag_id']
                 self.detections_dict[tag_id] = pred
 
-            if self.tag_id in self.detections_dict:
+            if self.small_tag_id in self.detections_dict:
                 self.tags_detected = True
 
 
@@ -566,8 +568,8 @@ class SkillHiveSelection(RayaFSMSkill):
                 'max_x_error_allowed': 0.05,
                 'max_y_error_allowed': 0.2,
                 'max_angle_error_allowed' : 3.0,
-                'step_size' : 0.25,
-                'min_correction_distance': 0.4,
+                'step_size' : 0.08,
+                'min_correction_distance': 0.12,
             },
             wait = False,
             callback_feedback = self.skill_callback_feedback,
@@ -716,8 +718,6 @@ class SkillHiveSelection(RayaFSMSkill):
             current_position = await self.navigation.get_position(
                                                 pos_unit = POSITION_UNIT.METERS,
                                                 ang_unit = ANGLE_UNIT.DEGREES)
-            self.approach_angle_error = self.execute_args['angle_to_goal'] - \
-                                                            current_position[2] 
             self.set_state('DETECTING_TAGS_1')
         
         else:
