@@ -31,10 +31,9 @@ NORMAL_FOOTPRINT = [
         [-0.25, -0.32]
     ]
 
-#TODO: CHANGE TO ACTUAL PICKUP FOOTPRINT
 PICKUP_FOOTPRINT = [
-    [-0.35,  0.70],
-    [ 0.35,  0.70],
-    [ 0.25, -0.32],
+    [-0.25,  0.32],
+    [ 0.52,  0.32],
+    [ 0.52, -0.32],
     [-0.25, -0.32]
 ]

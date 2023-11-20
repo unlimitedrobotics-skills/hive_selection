@@ -15,7 +15,8 @@ class RayaApplication(RayaApplicationBase):
                 'working_camera_2' : self.camera_2,
                 'map_name' : self.map_name,
                 'item_name' : self.item_name,
-                'tag_size' : self.tag_size
+                'small_tag_size' : self.small_tag_size,
+                'big_tag_size' : self.big_tag_size
             }
         )
 
@@ -26,7 +27,6 @@ class RayaApplication(RayaApplicationBase):
     async def main(self):
         execute_results = await self.hive_selection.execute_main(
             execute_args = {
-                'angle_to_goal' : self.angle_to_goal,
                 'identifier' : [self.item_dict[self.item_name]]
             },
             callback_feedback = self.cb_feedback
@@ -55,12 +55,6 @@ class RayaApplication(RayaApplicationBase):
                 help = 'name of camera to use on detection'
             )      
         
-        self.angle_to_goal = self.get_argument('-a', '--angle', 
-                type = float, 
-                required = True,
-                help = 'Angle to approach'
-            )  
-        
         self.map_name = self.get_argument('-m', '--map_name',
                 type = str,
                 required = True,
@@ -73,11 +67,19 @@ class RayaApplication(RayaApplicationBase):
                 help = 'item to pick')
     
 
-        self.tag_size = self.get_argument(
-            '-ts',  '--tag_size', 
+        self.small_tag_size = self.get_argument(
+            '-ts',  '--small_tag_size', 
             type = float, 
             default = 0.04,
-            required = True,
-            help = 'tag size in meters'
+            required = False,
+            help = 'small tag size in meters'
+        )
+
+        self.big_tag_size = self.get_argument(
+            '-tb', '--big_tag_size',
+            type = float,
+            default = 0.06,
+            required = False,
+            help = 'big tag size in meters'
         )
 

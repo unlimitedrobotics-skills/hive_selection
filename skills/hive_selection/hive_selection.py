@@ -33,7 +33,8 @@ class SkillHiveSelection(RayaFSMSkill):
         'working_camera_2',
         'map_name',
         'item_name',
-        'tag_size',
+        'small_tag_size',
+        'big_tag_size'
     ]
     
     DEFAULT_SETUP_ARGS = {
@@ -45,7 +46,7 @@ class SkillHiveSelection(RayaFSMSkill):
     REQUIRED_EXECUTE_ARGS = []
 
     DEFAULT_EXECUTE_ARGS = {
-        'distance_to_goal' : 0.68
+        'distance_to_goal' : 0.73
     }
 
 
@@ -74,7 +75,7 @@ class SkillHiveSelection(RayaFSMSkill):
     STATES_TIMEOUTS = {'DETECTING_TAGS_1' :
                        (NO_TARGET_TIMEOUT, ERROR_TAG_NOT_FOUND)}
 
-    debug = True
+    debug = False
     if debug is True:
         INITIAL_STATE = 'DEBUG_STATE'
 
@@ -135,8 +136,8 @@ class SkillHiveSelection(RayaFSMSkill):
 
         # Item to small tags number conversion dict
         self.small_tags_convertion_dict = {'bottle' : 4, 
-                                        'towel' : 1,      
-                                        'pajamas' : 3}
+                                            'towel' : 1,      
+                                            'pajamas' : 3}
         
         self.big_tags_convertion_dict = {'bottle' : 44,
                                            'towel' : 11,
@@ -257,13 +258,21 @@ class SkillHiveSelection(RayaFSMSkill):
 
     async def forward_kinematics(self,
                                  pose,
+                                 min_bbox_clear_obstacles = [],
+                                 max_bbox_clear_obstacles = [],
                                  cartesian_path = True,
                                  planner = 'RRTconnect',
                                  units = ANGLE_UNIT.DEGREES):
         '''
             INPUTS:
                 pose: dict with keys of x, y, z, roll, pitch, yaw, and float
-                      values
+                    values
+                min_bbox_clear_obstacles - JSON of {'x': value, 'y' :value...}
+                    of min bounding box corner to clear obstacles in
+                max_bbox_clear_obstacles - Same as above but max
+                cartesian_path - Whether or not to plan a path with the end
+                    effector moving in cartesian movements
+                planner - Type of planner
 
             OUTPUTS:
                 The function executes forward kinematics to the desired location
@@ -279,6 +288,8 @@ class SkillHiveSelection(RayaFSMSkill):
             yaw = pose["yaw"],
             units = units,
             cartesian_path = cartesian_path,
+            min_bbox_clear_obstacles = min_bbox_clear_obstacles,
+            max_bbox_clear_obstacles = max_bbox_clear_obstacles,
             callback_feedback = self.arms_callback_feedback,
             callback_finish = self.arms_callback_finish,
             velocity_scaling = 0.1,
@@ -353,14 +364,14 @@ class SkillHiveSelection(RayaFSMSkill):
                               self.trex_pose['z']]
 
 
-        await self.forward_kinematics(self.trex_pose,
-                                      #cartesian_path = True,
-                                      planner = 'RRTconnect')
+        await self.forward_kinematics(
+                pose = self.trex_pose,
+                planner = 'RRTconnect')
     
 
     def pixels2meters(self):
         '''Calculate the distance to move sideways from the console'''
-        if self.tag_id in self.detections_dict:
+        #if self.tag_id in self.detections_dict:
 
             # Convert camera pixels to meters in the current position
             #!!left/right in this position is the X axis for the camera but
@@ -377,9 +388,9 @@ class SkillHiveSelection(RayaFSMSkill):
             # Semi automatic correction in case of inaccuracies
             #if side_linear > 0.4  or side_linear < 0.275:
 
-            side_linear =  0.32 #+ y_base_dist_meters
-        
-            return side_linear
+        side_linear =  0.32 #+ y_base_dist_meters
+    
+        return side_linear
 
 
 
@@ -420,6 +431,7 @@ class SkillHiveSelection(RayaFSMSkill):
 
         return dict_r
     
+
 
     async def choose_next_target(self, n_rows = None, n_cols = None):
         '''Choose the cell from which to take the item'''
@@ -553,7 +565,7 @@ class SkillHiveSelection(RayaFSMSkill):
         self.log.info('Executing ApproachToTags skill...')
         await self.skill_approach.execute_setup(
              setup_args = {
-                'tags_size' : self.setup_args['tag_size'],
+                'tags_size' : self.setup_args['big_tag_size'],
                 'working_cameras' : [self.setup_args['working_camera_1']],
             }
         )
@@ -563,13 +575,13 @@ class SkillHiveSelection(RayaFSMSkill):
             execute_args = {
                 'angle_to_goal' : 0.0,
                 'distance_to_goal': self.execute_args['distance_to_goal'],
-                'identifier': self.execute_args['identifier'],
+                'identifier': [self.big_tad_id],
                 'linear_velocity': 0.06,
                 'max_x_error_allowed': 0.05,
                 'max_y_error_allowed': 0.2,
                 'max_angle_error_allowed' : 3.0,
-                'step_size' : 0.08,
-                'min_correction_distance': 0.12,
+                'step_size' : 0.1,
+                'min_correction_distance': 0.3,
             },
             wait = False,
             callback_feedback = self.skill_callback_feedback,
@@ -601,7 +613,7 @@ class SkillHiveSelection(RayaFSMSkill):
                 'quad_sigma': 0.0,
                 'decode_sharpening' : 0.25,
                 'refine_edges' : 1,
-                'tag_size' : self.setup_args['tag_size']
+                'tag_size' : self.setup_args['small_tag_size']
                 }
             )
         
@@ -665,9 +677,7 @@ class SkillHiveSelection(RayaFSMSkill):
     async def enter_NAVIGATING_TO_PATIENT(self):
         await self.sleep(1.5)
         await self.navigation.update_robot_footprint(PICKUP_FOOTPRINT)
-        await self.send_feedback('Footprint updated...')
-        await self.navigation.navigate_to_position()
-
+        await self.send_feedback(f'Footprint updated to {PICKUP_FOOTPRINT}')
 
         if not self.motion.is_moving():
             await self.motion.rotate(angle = 180,
@@ -839,6 +849,9 @@ class SkillHiveSelection(RayaFSMSkill):
         await self.check_navigation_success(nav_point = NAV_POINT_HOME)
         if self.navigation_successful:
             self.navigation_successful = False
+            await self.navigation.update_robot_footprint(NORMAL_FOOTPRINT)
+            await self.send_feedback(f'Footprint updated to {NORMAL_FOOTPRINT}')
+            await self.return_arm_home()
             self.set_state('END')
 
 
