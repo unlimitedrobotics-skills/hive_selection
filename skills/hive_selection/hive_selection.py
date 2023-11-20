@@ -46,7 +46,7 @@ class SkillHiveSelection(RayaFSMSkill):
     REQUIRED_EXECUTE_ARGS = []
 
     DEFAULT_EXECUTE_ARGS = {
-        'distance_to_goal' : 0.73
+        'distance_to_goal' : 0.72
     }
 
 
@@ -363,6 +363,7 @@ class SkillHiveSelection(RayaFSMSkill):
                               self.trex_pose['y'],
                               self.trex_pose['z']]
 
+        self.log.debug(f'POSE JEISON: {self.dynamic_trex}')
 
         await self.forward_kinematics(
                 pose = self.trex_pose,
@@ -577,10 +578,10 @@ class SkillHiveSelection(RayaFSMSkill):
                 'distance_to_goal': self.execute_args['distance_to_goal'],
                 'identifier': [self.big_tad_id],
                 'linear_velocity': 0.06,
-                'max_x_error_allowed': 0.05,
-                'max_y_error_allowed': 0.2,
+                'max_x_error_allowed': 0.03,
+                'max_y_error_allowed': 0.05,
                 'max_angle_error_allowed' : 3.0,
-                'step_size' : 0.1,
+                'step_size' : 0.2,
                 'min_correction_distance': 0.3,
             },
             wait = False,
@@ -702,7 +703,41 @@ class SkillHiveSelection(RayaFSMSkill):
     async def enter_DEBUG_STATE(self):
         await self.gripper_command('open')
         await self.return_arm_home()
-        await self.static_trex_position()
+        # await self.static_trex_position()
+
+         # Enable model
+        self.log.info('Enabling apriltags model...')
+
+        self.predictor_handler = await self.cv.enable_model(
+            model = 'detector',type = 'tag',
+            name = 'apriltags', 
+            source = self.setup_args['working_camera_2'],
+            model_params = {
+            'families' : 'tag36h11',
+            'nthreads' : 4,
+            'quad_decimate' : 2.0,
+            'quad_sigma': 0.0,
+            'decode_sharpening' : 0.25,
+            'refine_edges' : 1,
+            'tag_size' : self.setup_args['small_tag_size']
+            }
+        )
+    
+        # Create listeners
+        await self.predictor_handler.find_tags(
+            tags = self.tags_info, 
+            callback = self.callback_specific_tags
+        )
+    
+        self.predictor_handler.set_img_detections_callback(
+            callback = self.callback_predictions,
+            as_dict = True,
+            call_without_detections = True,
+            cameras_controller = self.cameras
+        )
+
+        # Start timer
+        self.detection_start_time = time.time()
 #--------------------------------- DEBUG ------------------------------------#
 
 
@@ -862,14 +897,6 @@ class SkillHiveSelection(RayaFSMSkill):
 
 #--------------------------------- DEBUG ------------------------------------#
     async def transition_from_DEBUG_STATE(self):
-        await self.navigation.update_robot_footprint(PICKUP_FOOTPRINT)
-        await self.send_feedback('Footprint updated...')
-        await self.navigation.navigate_to_position(
-                                            x = NAV_POINT_HIVE['x'],
-                                            y = NAV_POINT_HIVE['y'],
-                                            angle = NAV_POINT_HIVE['angle'],
-                                            pos_unit = POSITION_UNIT.METERS,
-                                            ang_unit = ANGLE_UNIT.DEGREES,
-                                            wait = True) 
-        self.set_state('END')       
+        await self.sleep(1.5)
+        self.set_state('DETECTING_TAGS_2')       
 #--------------------------------- DEBUG ------------------------------------#
