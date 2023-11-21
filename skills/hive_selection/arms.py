@@ -24,7 +24,9 @@ JOINT_NAMES = [
                 "arm_right_wrist_joint"
             ]
 
+#TREX_POSITION_ANGLES =  [0.0, 0.7, 0.0, 0.0, 2.1, 0.0, -1.2, -1.57]
 TREX_POSITION_ANGLES =  [0.0, 0.0, 0.0, 0.0, 2.1, 0.0, -0.5, -1.57]
+
 
 # Gary 13 right arm
 RIGHT_ARM_OFFSET = {'x' : -0.04,
